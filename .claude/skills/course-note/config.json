@@ -1,0 +1,13 @@
+{
+  "storagePath": "privateNote",
+  "layouts": {
+    "Week01": "per-week"
+  },
+  "codeRoot": "course_code",
+  "weekDirTemplate": "course_code/week{week}",
+  "lessonDirTemplate": "course_code/week{week}/{lesson}",
+  "secretFiles": [".env"],
+  "requiredParts": ["学习材料", "疑问", "自检"],
+  "requiredFields": ["title", "create_time", "update_time", "category", "tags", "project-description"],
+  "statusOptions": ["active", "outdated", "superseded", "archived"]
+}
