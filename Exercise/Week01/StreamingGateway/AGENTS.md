@@ -30,11 +30,11 @@ tests/        与 app 下的目录对应
 
 ## 事件
 
-对外只使用这 7 种 `RunEvent`：`run.started`、`text.delta`、`tool.started`、`tool.completed`、`run.completed`、`run.failed`、`run.cancelled`。
+对外事件以 `docs/02-RunEvent设计.md` 的全部主干类型为准。CLI 和 Web 共用同一套编码和 `reduce`。
 
-模型内部事件是 `text.delta`、完整的 `tool_call`、`model.finished`、`model.usage`。工具参数收齐后再交给循环，由循环写成一对 `tool.started` 和 `tool.completed`，两者使用同一个 `call_id`。
+模型内部事件是文字增量、完整的 `tool_call`、`model.finished`、`model.usage`。循环写成消息事件，以及 `tool.started`、`tool.arguments.done`、`tool.result`。同一次调用共用 `call_id`。执行工具只发生在 `tool.arguments.done` 之后。
 
-一次运行以 `run.started` 开始，以 `run.completed`、`run.failed`、`run.cancelled` 之一结束。TTFT 停在第一个非空 `text.delta`。
+一次运行以 `run.started` 开始，以 `run.completed`、`run.failed`、`run.cancelled` 之一结束。TTFT 停在第一个非空 `message.delta`。
 
 ## 请求
 
@@ -48,7 +48,7 @@ tests/        与 app 下的目录对应
 
 ## 模型调用
 
-- 首个非空 `text.delta` 之前可以换路由。已经有正文之后只发 `run.failed`。
+- 首个非空 `message.delta` 之前可以换路由。已经有正文之后只发 `run.failed`。
 - 带工具的失败用原始消息重试，不把半截回答拼进下一次提示词。
 - 每次模型调用带幂等键。
 - 用量可放进 `run.completed`。独立账本、Prompt 和回答正文不写入用量记录。
@@ -58,7 +58,7 @@ tests/        与 app 下的目录对应
 
 按 `docs/01-设计说明.md` 的 1 到 10 步进行，不跳过，也不提前做后续步骤的能力。
 
-当前停在第 1 步之前。第 1 到第 8 步使用内存 Store。SQLite、Redis、HTTP 回放、人工确认、多 Agent 路由和独立用量账本属于第 10 步或之后。
+模块包已建立。`events`、`sse` 和内存 `store` 已按主干接好。模型流式适配、Agent Loop 和 HTTP 路由仍按后续步骤实现。第 1 到第 8 步使用内存 Store。SQLite、Redis、HTTP 回放、人工确认、多 Agent 路由和独立用量账本属于第 10 步或之后。
 
 每一步都带测试。第 9 步集中验收：首字节前可重试、已有正文后只失败、取消会停上游、订阅断开不会停运行、Store 能按 `since` 读回。
 
