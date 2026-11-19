@@ -71,7 +71,22 @@
 
 ### 进程停了之后怎么接
 
-启动时找出状态仍是 `running` 或 `queued` 的 run，按日志判断：
+启动时找出状态仍是 `running` 或 `queued` 的 run，按日志判断。已有终态就改状态并停止。取消标记留到下一步边界，只写 `run.cancelled`。还没有文字或完整工具参数时，用原来的幂等键再打一次。已经有正文且没有写工具时，把半截文字放进消息，最多续一次；这个标记已经写上，就改为 `run.failed`。
+
+```mermaid
+flowchart TD
+  openRun["queued 或 running"] --> terminal{"日志里已有终态"}
+  terminal -->|是| repair["按事件改状态并停止"]
+  terminal -->|否| cancelled{"cancel_requested"}
+  cancelled -->|是| stopNode["下一步边界写 run.cancelled"]
+  cancelled -->|否| content{"已有文字或工具参数"}
+  content -->|否| sameKey["用原来的幂等键再打一次"]
+  content -->|是| wrote{"写工具"}
+  wrote -->|收据里已有结果| replay["追加 tool.result 不再发送"]
+  wrote -->|收据已占上结果为空| reconcile["先对账再补结果或重试"]
+  wrote -->|还没有收据| claim["占坑后执行一次"]
+  wrote -->|没有写工具| once["半截文字加进消息并最多续一次"]
+```
 
 | 日志停在哪 | 怎么接 |
 | --- | --- |
@@ -83,7 +98,7 @@
 | 写工具还没有收据 | 视为没发送过，占坑后再执行一次 |
 | `cancel_requested` 已设置 | 把标记留着，循环在下一步边界写 `run.cancelled` |
 
-已经交出去的文字不用原调用再生成一遍。写操作在没有收据时不再发一次。
+已经交出去的文字不用原调用再生成一遍。还没有收据的写操作视为没发送过，占坑后再执行一次；收据里已经有结果的不再发送。
 
 ### 回放接口
 

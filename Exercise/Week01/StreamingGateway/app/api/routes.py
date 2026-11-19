@@ -10,17 +10,20 @@ from app.events.types import TERMINAL_TYPES
 from app.loop.run import execute_run
 from app.sse.codec import SSE_HEADERS, encode, encode_heartbeat, encode_retry
 from app.sse.stream import HEARTBEAT_INTERVAL
-from app.store.memory import MemoryStore
+from app.store.memory import TERMINAL_STATUSES, MemoryStore
+from app.store.sqlite import SqliteStore
+
+Store = MemoryStore | SqliteStore
 
 
 class RunRouter(APIRouter):
-    def __init__(self, store: MemoryStore) -> None:
+    def __init__(self, store: Store) -> None:
         super().__init__()
         self.store = store
 
 
-def create_router(store: MemoryStore) -> RunRouter:
-    """创建、取消和状态查询。事件补发不在这里。"""
+def create_router(store: Store) -> RunRouter:
+    """创建、取消、状态查询，以及按序号补事件。"""
     router = RunRouter(store)
 
     @router.post("/v1/threads/{thread_id}/runs")
@@ -74,6 +77,28 @@ def create_router(store: MemoryStore) -> RunRouter:
             "seq": run.seq,
         }
 
+    @router.get("/v1/runs/{run_id}/events", response_model=None)
+    async def replay_events(run_id: str, request: Request, since: int = 0):
+        try:
+            run = store.get_run(run_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="未知运行") from None
+        if since < 0:
+            raise HTTPException(status_code=400, detail="游标不能为负")
+        floor = store.min_seq(run_id)
+        if since < floor:
+            return JSONResponse(
+                {"gap": True, "thread_id": run.thread_id, "min_seq": floor},
+                status_code=409,
+            )
+        interval = getattr(request.app.state, "heartbeat_interval", HEARTBEAT_INTERVAL)
+        headers = {**SSE_HEADERS, "X-Run-Id": run_id}
+        return StreamingResponse(
+            _watch(request, run_id, interval, since),
+            media_type="text/event-stream",
+            headers=headers,
+        )
+
     return router
 
 
@@ -87,15 +112,21 @@ def _stream(request: Request, run_id: str) -> StreamingResponse:
     )
 
 
-async def _watch(request: Request, run_id: str, heartbeat_interval: float) -> AsyncIterator[str]:
-    store: MemoryStore = request.app.state.store
+async def _watch(
+    request: Request,
+    run_id: str,
+    heartbeat_interval: float,
+    seq: int = 0,
+) -> AsyncIterator[str]:
+    store: Store = request.app.state.store
     yield encode_retry()
-    seq = 0
     while True:
         if await request.is_disconnected():
             return
         events = store.since(run_id, seq)
         if not events:
+            if store.get_run(run_id).status in TERMINAL_STATUSES:
+                return
             try:
                 await asyncio.wait_for(store.wait_for_change(run_id, seq), heartbeat_interval)
             except TimeoutError:

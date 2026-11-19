@@ -37,13 +37,22 @@ async def execute_run(
     tools: ToolRegistry,
     run_id: str,
     max_turns: int = 8,
+    *,
+    started: bool = False,
+    start_turn: int = 0,
+    idempotency_key: str | None = None,
 ) -> None:
     """把一次运行从 run.started 推进到终态。工具只在本轮模型以工具调用结束后执行。"""
-    await store.append(run_id, {"type": "run.started"})
+    if not started:
+        await store.append(run_id, {"type": "run.started"})
     run = store.get_run(run_id)
     memory = _Memory(messages=store.messages(run.thread_id))
+    if started:
+        memory.message_count = sum(
+            1 for event in store.since(run_id, 0) if event.type == "message.started"
+        )
     model_tools = tools.definitions() or None
-    for turn in range(max_turns):
+    for turn in range(start_turn, max_turns):
         if run.cancel_event.is_set():
             await _cancel(store, run_id)
             return
@@ -55,6 +64,7 @@ async def execute_run(
             run_id,
             turn,
             model_tools,
+            idempotency_key if turn == start_turn else None,
         )
         if pending is None:
             return
@@ -71,16 +81,19 @@ async def _read_model(
     run_id: str,
     turn: int,
     model_tools: list[dict[str, Any]] | None,
+    idempotency_key: str | None = None,
 ) -> _PendingTools | None:
     run = store.get_run(run_id)
     calls: list[ToolCall] = []
     text_parts: list[str] = []
     message_id: str | None = None
     finish_reason: str | None = None
+    key = idempotency_key or f"{run_id}:{turn}"
+    store.note_model_key(run_id, key)
     async for event in model.stream(
         memory.messages,
         cancel=run.cancel_event,
-        idempotency_key=f"{run_id}:{turn}",
+        idempotency_key=key,
         tools=model_tools,
     ):
         if run.cancel_event.is_set():

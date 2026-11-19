@@ -26,6 +26,9 @@ class EffectLedger:
     def __init__(self) -> None:
         self._rows: dict[str, Receipt] = {}
 
+    def get(self, key: str) -> Receipt | None:
+        return self._rows.get(key)
+
     def claim(
         self,
         key: str,

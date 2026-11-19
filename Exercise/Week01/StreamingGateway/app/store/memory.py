@@ -31,6 +31,8 @@ class RunState:
     version: int = 0
     events: list[RunEvent] = field(default_factory=list)
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+    model_key: str | None = None
+    continue_used: bool = False
 
 
 class MemoryStore:
@@ -121,6 +123,27 @@ class MemoryStore:
         async with self._changed:
             while not any(event.seq > seq for event in self.get_run(run_id).events):
                 await self._changed.wait()
+
+    def min_seq(self, run_id: str) -> int:
+        self.get_run(run_id)
+        return 0
+
+    def note_model_key(self, run_id: str, key: str) -> None:
+        self.get_run(run_id).model_key = key
+
+    def mark_continued(self, run_id: str) -> None:
+        self.get_run(run_id).continue_used = True
+
+    def continued(self, run_id: str) -> bool:
+        return self.get_run(run_id).continue_used
+
+    def unfinished(self) -> list[RunState]:
+        return [state for state in self._runs.values() if state.status not in TERMINAL_STATUSES]
+
+    def repair_status(self, run_id: str, status: str) -> None:
+        if status not in RUN_STATUSES:
+            raise RuntimeError(f"未知状态: {status}")
+        self.get_run(run_id).status = status
 
     def request_cancel(self, run_id: str) -> RunState:
         state = self.get_run(run_id)
