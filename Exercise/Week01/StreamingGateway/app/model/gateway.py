@@ -31,7 +31,7 @@ class GatewayModel:
 
     async def stream(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
         cancel: asyncio.Event,
         idempotency_key: str,

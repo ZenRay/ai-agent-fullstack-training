@@ -46,7 +46,7 @@ class _Fail(Exception):
 
 async def stream_with_policy(
     routes: Sequence[StreamingModel],
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     *,
     cancel: asyncio.Event,
     idempotency_key: str,
@@ -103,7 +103,7 @@ async def stream_with_policy(
 
 async def _read_attempt(
     model: StreamingModel,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     cancel: asyncio.Event,
     idempotency_key: str,
     limits: PolicyLimits,

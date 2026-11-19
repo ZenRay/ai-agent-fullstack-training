@@ -8,7 +8,7 @@ from app.model.events import ModelStreamEvent
 class StreamingModel(Protocol):
     def stream(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         *,
         cancel: asyncio.Event,
         idempotency_key: str,

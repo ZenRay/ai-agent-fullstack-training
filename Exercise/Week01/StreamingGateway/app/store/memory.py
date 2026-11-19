@@ -19,7 +19,7 @@ TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 @dataclass
 class ThreadState:
     thread_id: str
-    messages: list[dict[str, str]] = field(default_factory=list)
+    messages: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -46,15 +46,15 @@ class MemoryStore:
             self._threads[thread_id] = thread
         return thread
 
-    def add_message(self, thread_id: str, role: str, content: str) -> None:
+    def add_message(self, thread_id: str, role: str, content: str, **extra: Any) -> None:
         thread = self.ensure_thread(thread_id)
-        thread.messages.append({"role": role, "content": content})
+        thread.messages.append({"role": role, "content": content, **extra})
 
-    def messages(self, thread_id: str) -> list[dict[str, str]]:
+    def messages(self, thread_id: str) -> list[dict[str, Any]]:
         thread = self._threads.get(thread_id)
         if thread is None:
             return []
-        return list(thread.messages)
+        return [dict(message) for message in thread.messages]
 
     def create_run(self, thread_id: str, run_id: str) -> RunState:
         self.ensure_thread(thread_id)
