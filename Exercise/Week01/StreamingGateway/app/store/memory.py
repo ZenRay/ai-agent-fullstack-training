@@ -4,6 +4,17 @@ from typing import Any
 
 from app.events.types import EVENT_ADAPTER, OPENING_TYPES, TERMINAL_TYPES, RunEvent
 
+RUN_STATUSES = frozenset(
+    {"queued", "running", "waiting_for_approval", "completed", "failed", "cancelled"}
+)
+STATUS_OF = {
+    "run.started": "running",
+    "run.completed": "completed",
+    "run.failed": "failed",
+    "run.cancelled": "cancelled",
+}
+TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
 
 @dataclass
 class ThreadState:
@@ -15,7 +26,7 @@ class ThreadState:
 class RunState:
     thread_id: str
     run_id: str
-    status: str = "running"
+    status: str = "queued"
     seq: int = 0
     version: int = 0
     events: list[RunEvent] = field(default_factory=list)
@@ -76,21 +87,23 @@ class MemoryStore:
                     "run_id": state.run_id,
                 }
             )
-            if event.type == "run.completed":
-                state.status = "completed"
-            elif event.type == "run.failed":
-                state.status = "failed"
-            elif event.type == "run.cancelled":
-                state.status = "cancelled"
-            elif event.type == "run.started":
-                state.status = "running"
+            next_status = STATUS_OF.get(event.type, state.status)
+            if next_status not in RUN_STATUSES:
+                raise RuntimeError(f"未知状态: {next_status}")
+            state.status = next_status
             state.events.append(event)
             self._changed.notify_all()
             return event
 
     def since(self, run_id: str, seq: int) -> list[RunEvent]:
+        if seq < 0:
+            raise ValueError(f"游标不能为负: {seq}")
         state = self.get_run(run_id)
         return [event for event in state.events if event.seq > seq]
 
-    def request_cancel(self, run_id: str) -> None:
-        self.get_run(run_id).cancel_event.set()
+    def request_cancel(self, run_id: str) -> RunState:
+        state = self.get_run(run_id)
+        if state.status in TERMINAL_STATUSES:
+            return state
+        state.cancel_event.set()
+        return state
