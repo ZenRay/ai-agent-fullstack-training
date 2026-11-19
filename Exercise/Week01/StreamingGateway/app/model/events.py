@@ -26,8 +26,17 @@ class ModelUsageEvent(BaseModel):
     output_tokens: int
 
 
+class ModelFailed(BaseModel):
+    type: Literal["model.failed"] = "model.failed"
+    code: str
+    message: str
+    retryable: bool
+    phase: Literal["before_content", "after_content"]
+    retry_after_ms: float | None = None
+
+
 ModelStreamEvent = Annotated[
-    TextDelta | ToolCall | ModelFinished | ModelUsageEvent,
+    TextDelta | ToolCall | ModelFinished | ModelUsageEvent | ModelFailed,
     Field(discriminator="type"),
 ]
 MODEL_EVENT_ADAPTER = TypeAdapter(ModelStreamEvent)
