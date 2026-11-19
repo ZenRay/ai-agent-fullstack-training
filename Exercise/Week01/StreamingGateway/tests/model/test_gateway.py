@@ -111,6 +111,13 @@ def _tool_delta(arguments: str, *, name: str | None = None, call_id: str | None 
     return {"tool_calls": [call]}
 
 
+def test_keepalive_frames_do_not_produce_text_or_tool_calls() -> None:
+    translator = ChatStreamTranslator()
+    assert translator.feed(": keep-alive\n\n") == []
+    assert translator.feed(": keep-alive\n\n: ping\n\n") == []
+    assert translator.finish() == []
+
+
 def test_tool_arguments_are_emitted_only_when_complete() -> None:
     translator = ChatStreamTranslator()
     opened = _data(_choice(_tool_delta("", name="get_weather", call_id="c1")))

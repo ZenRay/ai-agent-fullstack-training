@@ -226,6 +226,45 @@ async def test_retry_forwards_the_same_tools() -> None:
 
 
 @pytest.mark.asyncio
+async def test_usage_alone_still_waits_for_the_first_token() -> None:
+    cancel = asyncio.Event()
+    model = FakeModel(
+        [
+            [ModelUsageEvent(type="model.usage", input_tokens=1, output_tokens=0), "block"],
+            _success(),
+        ]
+    )
+    events = await _collect(
+        [model],
+        cancel=cancel,
+        limits=_limits(first_token_timeout=0.02),
+    )
+    assert [event.type for event in events if event.type != "model.usage"] == [
+        "text.delta",
+        "model.finished",
+    ]
+    assert len(model.calls) == 2
+    assert [call["key"] for call in model.calls] == ["idem-1", "idem-1"]
+    assert not cancel.is_set()
+    assert not any(event.type == "tool_call" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_two_retryable_failures_then_success_share_one_key() -> None:
+    model = FakeModel(
+        [
+            [_failed("upstream_error", retryable=True)],
+            [_failed("upstream_error", retryable=True)],
+            _success(),
+        ]
+    )
+    events = await _collect([model], limits=_limits(max_attempts=3))
+    assert [event.type for event in events] == ["text.delta", "model.finished", "model.usage"]
+    assert len(model.calls) == 3
+    assert {call["key"] for call in model.calls} == {"idem-1"}
+
+
+@pytest.mark.asyncio
 async def test_adapter_runtime_error_propagates() -> None:
     model = FakeModel([RuntimeError("adapter bug")])
     with pytest.raises(RuntimeError, match="adapter bug"):
