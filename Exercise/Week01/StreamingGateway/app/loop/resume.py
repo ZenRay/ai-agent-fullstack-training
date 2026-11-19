@@ -1,7 +1,7 @@
 from typing import Any
 
 from app.events.types import TERMINAL_TYPES
-from app.loop.run import execute_run
+from app.loop.run import run_until_terminal
 from app.model.protocol import StreamingModel
 from app.store.memory import STATUS_OF, MemoryStore
 from app.store.sqlite import SqliteStore
@@ -33,7 +33,7 @@ async def resume_run(
         store.repair_status(run_id, STATUS_OF[terminal.type])
         return
     if not any(event.type == "run.started" for event in events):
-        await execute_run(store, model, tools, run_id)
+        await run_until_terminal(store, model, tools, run_id)
         return
     run = store.get_run(run_id)
     if run.cancel_event.is_set():
@@ -47,7 +47,14 @@ async def resume_run(
         if store.get_run(run_id).cancel_event.is_set():
             await store.append(run_id, {"type": "run.cancelled", "reason": "用户取消"})
             return
-        await execute_run(store, model, tools, run_id, started=True, start_turn=_start_turn(events))
+        await run_until_terminal(
+            store,
+            model,
+            tools,
+            run_id,
+            started=True,
+            start_turn=_start_turn(events),
+        )
         return
     if any(event.type == "message.completed" for event in events):
         await store.append(
@@ -60,7 +67,7 @@ async def resume_run(
         return
     key = f"{run_id}:0"
     store.note_model_key(run_id, key)
-    await execute_run(store, model, tools, run_id, started=True, idempotency_key=key)
+    await run_until_terminal(store, model, tools, run_id, started=True, idempotency_key=key)
 
 
 async def _continue_once(store, model, tools, run_id: str, events) -> None:
@@ -81,7 +88,7 @@ async def _continue_once(store, model, tools, run_id: str, events) -> None:
         store.add_message(store.get_run(run_id).thread_id, "assistant", partial)
     key = f"{run_id}:continue"
     store.note_model_key(run_id, key)
-    await execute_run(store, model, tools, run_id, started=True, idempotency_key=key)
+    await run_until_terminal(store, model, tools, run_id, started=True, idempotency_key=key)
 
 
 async def _resolve_pending(store, tools: ToolRegistry, run_id: str, events, pending) -> None:

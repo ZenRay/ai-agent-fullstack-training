@@ -252,6 +252,11 @@ class SqliteStore:
             state.cancel_event.set()
             return state
 
+    def note_usage(self, run_id: str, input_tokens: int, output_tokens: int) -> None:
+        state = self.get_run(run_id)
+        state.input_tokens += input_tokens
+        state.output_tokens += output_tokens
+
     def note_model_key(self, run_id: str, key: str) -> None:
         with self._lock:
             self._load_run(run_id)
@@ -352,7 +357,7 @@ class SqliteStore:
             with self._db:
                 self._db.execute(
                     "INSERT INTO run_events(run_id, seq, body) VALUES (?, ?, ?)",
-                    (run_id, seq, json.dumps(event.model_dump(), ensure_ascii=False)),
+                    (run_id, seq, json.dumps(event.model_dump(exclude_none=True), ensure_ascii=False)),
                 )
                 self._db.execute(
                     "UPDATE runs SET seq = ?, version = ?, status = ? WHERE run_id = ?",

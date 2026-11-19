@@ -33,6 +33,8 @@ class RunState:
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     model_key: str | None = None
     continue_used: bool = False
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class MemoryStore:
@@ -130,6 +132,11 @@ class MemoryStore:
 
     def note_model_key(self, run_id: str, key: str) -> None:
         self.get_run(run_id).model_key = key
+
+    def note_usage(self, run_id: str, input_tokens: int, output_tokens: int) -> None:
+        state = self.get_run(run_id)
+        state.input_tokens += input_tokens
+        state.output_tokens += output_tokens
 
     def mark_continued(self, run_id: str) -> None:
         self.get_run(run_id).continue_used = True

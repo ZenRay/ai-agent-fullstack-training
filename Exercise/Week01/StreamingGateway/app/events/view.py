@@ -41,6 +41,8 @@ def reduce(view: View, event: RunEvent) -> None:
     elif event.type == "run.failed":
         view.status = "failed"
         view.error = event.message
+        if event.usage is not None:
+            view.usage = event.usage
         view.done = True
     elif event.type == "run.cancelled":
         view.status = "cancelled"

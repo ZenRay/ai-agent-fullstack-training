@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.events.types import TERMINAL_TYPES
-from app.loop.run import execute_run
+from app.loop.run import run_until_terminal
 from app.sse.codec import SSE_HEADERS, encode, encode_heartbeat, encode_retry
 from app.sse.stream import HEARTBEAT_INTERVAL
 from app.store.memory import TERMINAL_STATUSES, MemoryStore
@@ -48,7 +48,7 @@ def create_router(store: Store) -> RunRouter:
         run = store.create_run(thread_id, _new_run_id())
         if key:
             store.remember_idempotency(key, fingerprint, run.run_id)
-        _track(request, execute_run(store, model, request.app.state.tools, run.run_id))
+        _track(request, run_until_terminal(store, model, request.app.state.tools, run.run_id))
         return _stream(request, run.run_id)
 
     @router.post("/v1/runs/{run_id}/cancel", response_model=None)

@@ -2,6 +2,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.events.types import TERMINAL_TYPES
 from app.model.events import ToolCall
 from app.model.protocol import StreamingModel
 from app.store.memory import MemoryStore
@@ -9,6 +10,7 @@ from app.tools.execute import canonical_arguments, execute_tool
 from app.tools.registry import ToolRegistry
 
 # 设计里的结束原因是 tool_use。网关翻译目前沿用供应商的 tool_calls。
+_INCOMPLETE = "运行中断，已生成的内容仍保留在前面的事件里"
 _TOOL_REASONS = frozenset({"tool_use", "tool_calls"})
 _FAILED_FINISH = {
     "length": ("length", "输出被截断，不再把半截内容交给下一轮", False),
@@ -29,6 +31,55 @@ class _Memory:
 class _PendingTools:
     calls: list[ToolCall]
     text: str
+
+
+async def run_until_terminal(
+    store: MemoryStore,
+    model: StreamingModel,
+    tools: ToolRegistry,
+    run_id: str,
+    max_turns: int = 8,
+    *,
+    started: bool = False,
+    start_turn: int = 0,
+    idempotency_key: str | None = None,
+) -> None:
+    """跑完一次循环。退出时若日志还没有终态，补一条 incomplete-stream。"""
+    try:
+        await execute_run(
+            store,
+            model,
+            tools,
+            run_id,
+            max_turns,
+            started=started,
+            start_turn=start_turn,
+            idempotency_key=idempotency_key,
+        )
+    finally:
+        if not _has_terminal(store, run_id):
+            await store.append(run_id, _incomplete_body(store, tools, run_id))
+
+
+def _has_terminal(store: MemoryStore, run_id: str) -> bool:
+    try:
+        events = store.since(run_id, 0)
+    except KeyError:
+        return True
+    return any(event.type in TERMINAL_TYPES for event in events)
+
+
+def _incomplete_body(store: MemoryStore, tools: ToolRegistry, run_id: str) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "type": "run.failed",
+        "code": "incomplete-stream",
+        "message": _INCOMPLETE,
+        "retryable": not tools.effects.has_unknown(run_id),
+    }
+    run = store.get_run(run_id)
+    if run.input_tokens or run.output_tokens:
+        body["usage"] = {"input_tokens": run.input_tokens, "output_tokens": run.output_tokens}
+    return body
 
 
 async def execute_run(
@@ -104,6 +155,7 @@ async def _read_model(
         if event.type == "model.usage":
             memory.input_tokens += event.input_tokens
             memory.output_tokens += event.output_tokens
+            store.note_usage(run_id, event.input_tokens, event.output_tokens)
             continue
         if finish_reason is not None:
             continue
@@ -159,13 +211,7 @@ async def _read_model(
             return None
         return _PendingTools(calls=calls, text=text)
     if finish_reason is None:
-        await _fail(
-            store,
-            run_id,
-            "incomplete-stream",
-            "运行中断，已生成的内容仍保留在前面的事件里",
-            not tools.effects.has_unknown(run_id),
-        )
+        await store.append(run_id, _incomplete_body(store, tools, run_id))
         return None
     await _fail(store, run_id, finish_reason, f"未知的结束原因: {finish_reason}", False)
     return None

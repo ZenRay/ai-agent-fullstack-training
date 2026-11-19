@@ -10,7 +10,7 @@ SSE_HEADERS = {
 
 
 def encode(event: RunEvent) -> str:
-    payload = event.model_dump_json()
+    payload = event.model_dump_json(exclude_none=True)
     return f"id: {event.seq}\nevent: {event.type}\ndata: {payload}\n\n"
 
 

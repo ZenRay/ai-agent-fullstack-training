@@ -66,6 +66,7 @@ class RunFailed(RunEventBase):
     code: str
     message: str
     retryable: bool
+    usage: Usage | None = None
 
 
 class RunCancelled(RunEventBase):

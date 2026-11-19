@@ -2,7 +2,7 @@ import asyncio
 import copy
 import random
 
-from app.loop.run import execute_run
+from app.loop.run import execute_run, run_until_terminal
 from app.model.events import ModelFailed, ModelFinished, TextDelta, ToolCall
 from app.model.policy import PolicyLimits, stream_with_policy
 from app.store.memory import MemoryStore
@@ -207,7 +207,9 @@ async def test_failure_after_a_write_does_not_start_another_model_call() -> None
 async def test_subscriber_disconnect_leaves_the_run_going() -> None:
     release = asyncio.Event()
     store = _store()
-    run_task = asyncio.create_task(execute_run(store, GatedModel(release), ToolRegistry(), "run_1"))
+    run_task = asyncio.create_task(
+        run_until_terminal(store, GatedModel(release), ToolRegistry(), "run_1")
+    )
     seen = asyncio.Event()
     found: dict[str, int] = {}
 
