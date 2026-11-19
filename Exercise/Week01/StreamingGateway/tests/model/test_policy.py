@@ -16,8 +16,10 @@ class FakeModel:
         self.calls: list[dict] = []
         self.index = 0
 
-    async def stream(self, messages, *, cancel, idempotency_key):
-        self.calls.append({"messages": messages, "key": idempotency_key, "cancel": cancel})
+    async def stream(self, messages, *, cancel, idempotency_key, tools=None):
+        self.calls.append(
+            {"messages": messages, "key": idempotency_key, "cancel": cancel, "tools": tools}
+        )
         action = self.rounds[self.index]
         self.index += 1
         if isinstance(action, Exception):
@@ -197,6 +199,30 @@ async def test_first_token_timeout_retries_without_setting_caller_cancel() -> No
     assert len(model.calls) == 2
     assert model.calls[0]["cancel"].is_set()
     assert not cancel.is_set()
+
+
+@pytest.mark.asyncio
+async def test_retry_forwards_the_same_tools() -> None:
+    tools = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
+    model = FakeModel([[_failed("rate_limit", retryable=True)], _success()])
+
+    async def pause(_delay: float) -> None:
+        return None
+
+    events = []
+    async for event in stream_with_policy(
+        [model],
+        MESSAGES,
+        cancel=asyncio.Event(),
+        idempotency_key="idem-1",
+        limits=_limits(),
+        sleep=pause,
+        tools=tools,
+    ):
+        events.append(event)
+    assert [event.type for event in events] == ["text.delta", "model.finished", "model.usage"]
+    assert [call["tools"] for call in model.calls] == [tools, tools]
+    assert all(call["messages"] == MESSAGES for call in model.calls)
 
 
 @pytest.mark.asyncio

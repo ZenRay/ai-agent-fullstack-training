@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.model.events import ModelStreamEvent
 
@@ -12,4 +12,5 @@ class StreamingModel(Protocol):
         *,
         cancel: asyncio.Event,
         idempotency_key: str,
+        tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[ModelStreamEvent]: ...

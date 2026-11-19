@@ -9,6 +9,7 @@ description = "Streaming gateway for one agent run"
 requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
   "pydantic>=2.9,<3",
   "uvicorn[standard]>=0.30,<1",
 ]

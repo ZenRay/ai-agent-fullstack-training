@@ -2,6 +2,7 @@ import asyncio
 import random
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from app.model.events import ModelFailed, ModelStreamEvent
 from app.model.protocol import StreamingModel
@@ -52,6 +53,7 @@ async def stream_with_policy(
     limits: PolicyLimits | None = None,
     sleep: Callable[[float], Awaitable[None]] | None = None,
     rng: random.Random | None = None,
+    tools: list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[ModelStreamEvent]:
     limits = limits or PolicyLimits()
     pause = sleep or asyncio.sleep
@@ -70,6 +72,7 @@ async def stream_with_policy(
                     cancel,
                     idempotency_key,
                     limits,
+                    tools,
                 ):
                     yield event
             except _Cancelled:
@@ -104,10 +107,16 @@ async def _read_attempt(
     cancel: asyncio.Event,
     idempotency_key: str,
     limits: PolicyLimits,
+    tools: list[dict[str, Any]] | None,
 ) -> AsyncIterator[ModelStreamEvent]:
     abort = asyncio.Event()
     saw_content = False
-    stream = model.stream(messages, cancel=abort, idempotency_key=idempotency_key)
+    stream = model.stream(
+        messages,
+        cancel=abort,
+        idempotency_key=idempotency_key,
+        tools=tools,
+    )
     try:
         while True:
             if cancel.is_set():
