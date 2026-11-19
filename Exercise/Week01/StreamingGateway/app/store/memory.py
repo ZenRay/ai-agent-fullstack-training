@@ -37,6 +37,7 @@ class MemoryStore:
     def __init__(self) -> None:
         self._threads: dict[str, ThreadState] = {}
         self._runs: dict[str, RunState] = {}
+        self._idempotency: dict[str, tuple[str, str]] = {}
         self._changed = asyncio.Condition()
 
     def ensure_thread(self, thread_id: str) -> ThreadState:
@@ -100,6 +101,26 @@ class MemoryStore:
             raise ValueError(f"游标不能为负: {seq}")
         state = self.get_run(run_id)
         return [event for event in state.events if event.seq > seq]
+
+    def active_run(self, thread_id: str) -> RunState | None:
+        for state in self._runs.values():
+            if state.thread_id == thread_id and state.status not in TERMINAL_STATUSES:
+                return state
+        return None
+
+    def find_idempotency(self, key: str) -> tuple[str, str] | None:
+        return self._idempotency.get(key)
+
+    def remember_idempotency(self, key: str, fingerprint: str, run_id: str) -> None:
+        current = self._idempotency.get(key)
+        if current is not None and current != (fingerprint, run_id):
+            raise ValueError(f"幂等键已被不同的请求使用: {key}")
+        self._idempotency[key] = (fingerprint, run_id)
+
+    async def wait_for_change(self, run_id: str, seq: int) -> None:
+        async with self._changed:
+            while not any(event.seq > seq for event in self.get_run(run_id).events):
+                await self._changed.wait()
 
     def request_cancel(self, run_id: str) -> RunState:
         state = self.get_run(run_id)
