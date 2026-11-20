@@ -8,6 +8,7 @@ from app.prompts.catalog import Catalog
 from app.prompts.hashing import identity_dict
 from app.prompts.render import render
 from app.prompts.types import EvalCase, EvalSet, ModelSettings, PromptVersion, ToolResultFixture
+from app.prompts.untrusted import mark_untrusted
 from app.tools.execute import canonical_arguments, parse_and_validate
 from app.tools.registry import ToolRegistry
 
@@ -239,7 +240,7 @@ def _with_result(
                 }
             ],
         },
-        {"role": "tool", "content": result.output, "tool_call_id": "c1"},
+        {"role": "tool", "content": mark_untrusted("tool", result.output), "tool_call_id": "c1"},
     ]
 
 

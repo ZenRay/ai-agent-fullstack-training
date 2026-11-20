@@ -11,6 +11,7 @@ from app.prompts.hashing import PromptError
 from app.prompts.output import check_output, degrade_text, repair_prompt
 from app.prompts.output import response_format as structured_format
 from app.prompts.render import ResolvedPrompt, render
+from app.prompts.untrusted import strip_hidden
 from app.store.memory import MemoryStore
 from app.tools.execute import canonical_arguments, execute_tool
 from app.tools.registry import ToolRegistry
@@ -363,13 +364,14 @@ async def _record_results(
     )
     repeated = False
     for call, result in executed:
+        output = strip_hidden(str(result["output"]))
         await store.append(
             run_id,
             {
                 "type": "tool.result",
                 "call_id": call.call_id,
                 "ok": result["ok"],
-                "output": result["output"],
+                "output": output,
             },
         )
         _remember(
@@ -377,14 +379,14 @@ async def _record_results(
             thread_id,
             memory.messages,
             "tool",
-            result["output"],
+            output,
             tool_call_id=call.call_id,
         )
         signature = (call.name, canonical_arguments(call.arguments))
         previous = memory.seen.get(signature)
-        if previous is not None and previous == result["output"]:
+        if previous is not None and previous == output:
             repeated = True
-        memory.seen[signature] = result["output"]
+        memory.seen[signature] = output
     return repeated
 
 

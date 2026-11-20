@@ -10,6 +10,7 @@ from app.events.types import TERMINAL_TYPES
 from app.loop.run import run_until_terminal
 from app.prompts.hashing import PromptError
 from app.prompts.render import ResolvedPrompt, resolve
+from app.prompts.untrusted import strip_hidden
 from app.sse.codec import SSE_HEADERS, encode, encode_heartbeat, encode_retry
 from app.sse.stream import HEARTBEAT_INTERVAL
 from app.store.memory import TERMINAL_STATUSES, MemoryStore
@@ -187,7 +188,7 @@ async def _read_request(request: Request) -> tuple[str, tuple[str, int] | None, 
         raise HTTPException(status_code=400, detail="正文不是合法 JSON") from None
     if not isinstance(payload, dict) or not isinstance(payload.get("message"), str):
         raise HTTPException(status_code=400, detail="缺少用户消息")
-    message = payload["message"].strip()
+    message = strip_hidden(payload["message"]).strip()
     if not message:
         raise HTTPException(status_code=400, detail="缺少用户消息")
     selection = _read_selection(payload.get("prompt", None))
