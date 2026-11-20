@@ -22,6 +22,14 @@ class ThreadState:
     messages: list[dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class PromptCall:
+    trace_id: str
+    name: str
+    version: int
+    content_hash: str
+
+
 @dataclass
 class RunState:
     thread_id: str
@@ -35,6 +43,11 @@ class RunState:
     continue_used: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
+    prompt_name: str | None = None
+    prompt_version: int | None = None
+    prompt_hash: str | None = None
+    prompt_variables: dict[str, str] = field(default_factory=dict)
+    prompt_calls: list[PromptCall] = field(default_factory=list)
 
 
 class MemoryStore:
@@ -132,6 +145,48 @@ class MemoryStore:
 
     def note_model_key(self, run_id: str, key: str) -> None:
         self.get_run(run_id).model_key = key
+
+    def bind_prompt(
+        self,
+        run_id: str,
+        *,
+        name: str,
+        version: int,
+        content_hash: str,
+        variables: dict[str, str],
+    ) -> None:
+        state = self.get_run(run_id)
+        if state.prompt_name is not None and (
+            state.prompt_name != name
+            or state.prompt_version != version
+            or state.prompt_hash != content_hash
+        ):
+            raise ValueError(f"运行已绑定其他提示词版本: {run_id}")
+        state.prompt_name = name
+        state.prompt_version = version
+        state.prompt_hash = content_hash
+        state.prompt_variables = dict(variables)
+
+    def note_prompt_call(
+        self,
+        run_id: str,
+        trace_id: str,
+        name: str,
+        version: int,
+        content_hash: str,
+    ) -> None:
+        state = self.get_run(run_id)
+        for call in state.prompt_calls:
+            if call.trace_id == trace_id:
+                if (call.name, call.version, call.content_hash) != (name, version, content_hash):
+                    raise ValueError(f"同一次模型调用不能改用另一版提示词: {trace_id}")
+                return
+        state.prompt_calls.append(
+            PromptCall(trace_id=trace_id, name=name, version=version, content_hash=content_hash)
+        )
+
+    def prompt_calls(self, run_id: str) -> list[PromptCall]:
+        return list(self.get_run(run_id).prompt_calls)
 
     def note_usage(self, run_id: str, input_tokens: int, output_tokens: int) -> None:
         state = self.get_run(run_id)

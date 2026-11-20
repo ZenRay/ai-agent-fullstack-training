@@ -6,7 +6,7 @@ from threading import RLock
 from typing import Any
 
 from app.events.types import EVENT_ADAPTER, OPENING_TYPES, RunEvent
-from app.store.memory import RUN_STATUSES, STATUS_OF, TERMINAL_STATUSES, RunState
+from app.store.memory import RUN_STATUSES, STATUS_OF, TERMINAL_STATUSES, PromptCall, RunState
 from app.tools.effects import Receipt
 
 _OPEN_STATUSES = ("queued", "running", "waiting_for_approval")
@@ -30,6 +30,7 @@ _TABLES = frozenset(
         "checkpoints",
         "usage",
         "idempotency_keys",
+        "prompt_calls",
     }
 )
 
@@ -56,7 +57,11 @@ CREATE TABLE IF NOT EXISTS runs (
   cancel_requested INTEGER NOT NULL,
   model_key TEXT,
   continue_used INTEGER NOT NULL,
-  min_seq INTEGER NOT NULL
+  min_seq INTEGER NOT NULL,
+  prompt_name TEXT,
+  prompt_version INTEGER,
+  prompt_hash TEXT,
+  prompt_variables TEXT
 );
 
 CREATE TABLE IF NOT EXISTS run_events (
@@ -99,6 +104,15 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   run_id TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS prompt_calls (
+  run_id TEXT NOT NULL,
+  trace_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,
+  PRIMARY KEY (run_id, trace_id)
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS one_open_run
   ON runs(thread_id)
   WHERE status IN ('queued', 'running', 'waiting_for_approval');
@@ -117,6 +131,7 @@ class SqliteStore:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA foreign_keys=ON")
         self._db.executescript(_SCHEMA)
+        _ensure_prompt_columns(self._db)
         self._db.commit()
         self.effects = SqliteEffectLedger(self)
 
@@ -263,6 +278,85 @@ class SqliteStore:
             self._db.execute("UPDATE runs SET model_key = ? WHERE run_id = ?", (key, run_id))
             self._db.commit()
             self._cache[run_id].model_key = key
+
+    def bind_prompt(
+        self,
+        run_id: str,
+        *,
+        name: str,
+        version: int,
+        content_hash: str,
+        variables: dict[str, str],
+    ) -> None:
+        encoded = json.dumps(variables, ensure_ascii=False, sort_keys=True)
+        with self._lock:
+            state = self._load_run(run_id)
+            if state.prompt_name is not None and (
+                state.prompt_name != name
+                or state.prompt_version != version
+                or state.prompt_hash != content_hash
+            ):
+                raise ValueError(f"运行已绑定其他提示词版本: {run_id}")
+            self._db.execute(
+                """
+                UPDATE runs
+                SET prompt_name = ?, prompt_version = ?, prompt_hash = ?, prompt_variables = ?
+                WHERE run_id = ?
+                """,
+                (name, version, content_hash, encoded, run_id),
+            )
+            self._db.commit()
+            state.prompt_name = name
+            state.prompt_version = version
+            state.prompt_hash = content_hash
+            state.prompt_variables = dict(variables)
+
+    def note_prompt_call(
+        self,
+        run_id: str,
+        trace_id: str,
+        name: str,
+        version: int,
+        content_hash: str,
+    ) -> None:
+        with self._lock:
+            self._load_run(run_id)
+            row = self._db.execute(
+                "SELECT name, version, content_hash FROM prompt_calls WHERE run_id = ? AND trace_id = ?",
+                (run_id, trace_id),
+            ).fetchone()
+            if row is not None:
+                if (row["name"], int(row["version"]), row["content_hash"]) != (name, version, content_hash):
+                    raise ValueError(f"同一次模型调用不能改用另一版提示词: {trace_id}")
+                return
+            self._db.execute(
+                """
+                INSERT INTO prompt_calls(run_id, trace_id, name, version, content_hash)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (run_id, trace_id, name, version, content_hash),
+            )
+            self._db.commit()
+
+    def prompt_calls(self, run_id: str) -> list[PromptCall]:
+        with self._lock:
+            self._load_run(run_id)
+            rows = self._db.execute(
+                """
+                SELECT trace_id, name, version, content_hash
+                FROM prompt_calls WHERE run_id = ? ORDER BY rowid
+                """,
+                (run_id,),
+            ).fetchall()
+        return [
+            PromptCall(
+                trace_id=row["trace_id"],
+                name=row["name"],
+                version=int(row["version"]),
+                content_hash=row["content_hash"],
+            )
+            for row in rows
+        ]
 
     def mark_continued(self, run_id: str) -> None:
         with self._lock:
@@ -452,6 +546,11 @@ class SqliteStore:
         state.version = int(row["version"])
         state.model_key = row["model_key"]
         state.continue_used = bool(row["continue_used"])
+        state.prompt_name = row["prompt_name"]
+        state.prompt_version = None if row["prompt_version"] is None else int(row["prompt_version"])
+        state.prompt_hash = row["prompt_hash"]
+        raw_variables = row["prompt_variables"]
+        state.prompt_variables = json.loads(raw_variables) if raw_variables else {}
         if row["cancel_requested"]:
             state.cancel_event.set()
         return state
@@ -575,3 +674,27 @@ def _dump(extra: dict[str, Any]) -> str:
 
 def _placeholders(values: tuple[str, ...]) -> str:
     return ", ".join("?" for _ in values)
+
+
+def _ensure_prompt_columns(db: sqlite3.Connection) -> None:
+    present = {row["name"] for row in db.execute("PRAGMA table_info(runs)")}
+    for name, declaration in (
+        ("prompt_name", "TEXT"),
+        ("prompt_version", "INTEGER"),
+        ("prompt_hash", "TEXT"),
+        ("prompt_variables", "TEXT"),
+    ):
+        if name not in present:
+            db.execute(f"ALTER TABLE runs ADD COLUMN {name} {declaration}")
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS prompt_calls (
+          run_id TEXT NOT NULL,
+          trace_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          content_hash TEXT NOT NULL,
+          PRIMARY KEY (run_id, trace_id)
+        )
+        """
+    )

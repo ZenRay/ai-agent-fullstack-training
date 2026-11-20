@@ -269,3 +269,42 @@ async def test_adapter_runtime_error_propagates() -> None:
     model = FakeModel([RuntimeError("adapter bug")])
     with pytest.raises(RuntimeError, match="adapter bug"):
         await _collect([model])
+
+
+@pytest.mark.asyncio
+async def test_policy_forwards_prompt_model_settings() -> None:
+    class RecordingModel:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def stream(
+            self,
+            messages,
+            *,
+            cancel,
+            idempotency_key,
+            tools=None,
+            model=None,
+            temperature=None,
+            tool_choice=None,
+        ):
+            self.calls.append(
+                {"model": model, "temperature": temperature, "tool_choice": tool_choice}
+            )
+            for event in _success():
+                yield event
+
+    model = RecordingModel()
+    events = []
+    async for event in stream_with_policy(
+        [model],
+        MESSAGES,
+        cancel=asyncio.Event(),
+        idempotency_key="idem-1",
+        limits=_limits(),
+        model="chat-default",
+        tool_choice="auto",
+    ):
+        events.append(event)
+    assert [event.type for event in events] == ["text.delta", "model.finished", "model.usage"]
+    assert model.calls[0] == {"model": "chat-default", "temperature": None, "tool_choice": "auto"}

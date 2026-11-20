@@ -183,3 +183,47 @@ async def test_cancel_stops_without_a_failure() -> None:
         events.append(event)
         cancel.set()
     assert [event.type for event in events] == ["text.delta"]
+
+
+@pytest.mark.asyncio
+async def test_prompt_settings_enter_the_request_body() -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, content=b"data: [DONE]\n\n")
+
+    tools = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
+    async for _event in _model(handler).stream(
+        MESSAGES,
+        cancel=asyncio.Event(),
+        idempotency_key="idem-1",
+        tools=tools,
+        model="other-model",
+        temperature=0.2,
+        tool_choice="auto",
+    ):
+        pass
+    assert seen["body"]["model"] == "other-model"
+    assert seen["body"]["temperature"] == 0.2
+    assert seen["body"]["tool_choice"] == "auto"
+    assert seen["body"]["tools"] == tools
+
+
+@pytest.mark.asyncio
+async def test_absent_temperature_stays_out_of_the_request_body() -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, content=b"data: [DONE]\n\n")
+
+    async for _event in _model(handler).stream(
+        MESSAGES,
+        cancel=asyncio.Event(),
+        idempotency_key="idem-1",
+    ):
+        pass
+    assert seen["body"]["model"] == "chat-default"
+    assert "temperature" not in seen["body"]
+    assert "tool_choice" not in seen["body"]

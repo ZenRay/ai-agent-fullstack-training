@@ -21,7 +21,17 @@ class ScriptedModel:
         self.release = release
         self.calls: list[dict] = []
 
-    async def stream(self, messages, *, cancel, idempotency_key, tools=None):
+    async def stream(
+        self,
+        messages,
+        *,
+        cancel,
+        idempotency_key,
+        tools=None,
+        model=None,
+        temperature=None,
+        tool_choice=None,
+    ):
         self.calls.append(
             {
                 "messages": copy.deepcopy(messages),
@@ -197,6 +207,9 @@ async def test_create_streams_until_completed_and_keeps_the_user_message() -> No
         "thread_id": "th",
         "status": "completed",
         "seq": events[-1].seq,
+        "prompt_name": store.get_run(run_id).prompt_name,
+        "prompt_version": store.get_run(run_id).prompt_version,
+        "prompt_hash": store.get_run(run_id).prompt_hash,
     }
 
 

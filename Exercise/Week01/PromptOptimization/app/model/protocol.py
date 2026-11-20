@@ -13,4 +13,7 @@ class StreamingModel(Protocol):
         cancel: asyncio.Event,
         idempotency_key: str,
         tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        temperature: float | None = None,
+        tool_choice: str | None = None,
     ) -> AsyncIterator[ModelStreamEvent]: ...

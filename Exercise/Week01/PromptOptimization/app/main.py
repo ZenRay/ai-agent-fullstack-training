@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from app.api.routes import create_router
 from app.loop.resume import resume_unfinished
 from app.model.protocol import StreamingModel
+from app.prompts.catalog import default_catalog
 from app.sse.stream import HEARTBEAT_INTERVAL
 from app.store.memory import MemoryStore
 from app.store.sqlite import SqliteStore
@@ -26,6 +27,7 @@ def create_app(
     if isinstance(app.state.store, SqliteStore):
         tools.effects = app.state.store.effects
     app.state.tools = tools
+    app.state.catalog = default_catalog()
     app.include_router(create_router(app.state.store))
     return app
 

@@ -36,19 +36,26 @@ class GatewayModel:
         cancel: asyncio.Event,
         idempotency_key: str,
         tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        temperature: float | None = None,
+        tool_choice: str | None = None,
     ) -> AsyncIterator[ModelStreamEvent]:
         client = self._client
         owns_client = client is None
         if client is None:
             client = httpx.AsyncClient()
         body: dict[str, Any] = {
-            "model": self.model,
+            "model": model or self.model,
             "messages": messages,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
         if tools:
             body["tools"] = tools
+            if tool_choice is not None:
+                body["tool_choice"] = tool_choice
+        if temperature is not None:
+            body["temperature"] = temperature
         translator = ChatStreamTranslator()
         try:
             async with client.stream(

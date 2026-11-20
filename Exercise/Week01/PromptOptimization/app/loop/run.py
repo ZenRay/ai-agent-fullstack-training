@@ -5,6 +5,10 @@ from typing import Any
 from app.events.types import TERMINAL_TYPES
 from app.model.events import ToolCall
 from app.model.protocol import StreamingModel
+from app.prompts.assemble import assemble, tool_definitions
+from app.prompts.catalog import Catalog, default_catalog
+from app.prompts.hashing import PromptError
+from app.prompts.render import ResolvedPrompt, render
 from app.store.memory import MemoryStore
 from app.tools.execute import canonical_arguments, execute_tool
 from app.tools.registry import ToolRegistry
@@ -43,6 +47,8 @@ async def run_until_terminal(
     started: bool = False,
     start_turn: int = 0,
     idempotency_key: str | None = None,
+    prompt: ResolvedPrompt | None = None,
+    catalog: Catalog | None = None,
 ) -> None:
     """跑完一次循环。退出时若日志还没有终态，补一条 incomplete-stream。"""
     try:
@@ -55,6 +61,8 @@ async def run_until_terminal(
             started=started,
             start_turn=start_turn,
             idempotency_key=idempotency_key,
+            prompt=prompt,
+            catalog=catalog,
         )
     finally:
         if not _has_terminal(store, run_id):
@@ -92,8 +100,21 @@ async def execute_run(
     started: bool = False,
     start_turn: int = 0,
     idempotency_key: str | None = None,
+    prompt: ResolvedPrompt | None = None,
+    catalog: Catalog | None = None,
 ) -> None:
     """把一次运行从 run.started 推进到终态。工具只在本轮模型以工具调用结束后执行。"""
+    source = catalog or default_catalog()
+    if prompt is None:
+        prompt = _prompt_from_store(store, run_id, source)
+    if prompt is not None:
+        store.bind_prompt(
+            run_id,
+            name=prompt.version.name,
+            version=prompt.version.version,
+            content_hash=prompt.version.content_hash,
+            variables=prompt.variables,
+        )
     if not started:
         await store.append(run_id, {"type": "run.started"})
     run = store.get_run(run_id)
@@ -102,7 +123,8 @@ async def execute_run(
         memory.message_count = sum(
             1 for event in store.since(run_id, 0) if event.type == "message.started"
         )
-    model_tools = tools.definitions() or None
+    definitions = tool_definitions(prompt.version) if prompt is not None else tools.definitions()
+    model_tools = definitions or None
     for turn in range(start_turn, max_turns):
         if run.cancel_event.is_set():
             await _cancel(store, run_id)
@@ -116,6 +138,7 @@ async def execute_run(
             turn,
             model_tools,
             idempotency_key if turn == start_turn else None,
+            prompt,
         )
         if pending is None:
             return
@@ -133,6 +156,7 @@ async def _read_model(
     turn: int,
     model_tools: list[dict[str, Any]] | None,
     idempotency_key: str | None = None,
+    prompt: ResolvedPrompt | None = None,
 ) -> _PendingTools | None:
     run = store.get_run(run_id)
     calls: list[ToolCall] = []
@@ -141,11 +165,28 @@ async def _read_model(
     finish_reason: str | None = None
     key = idempotency_key or f"{run_id}:{turn}"
     store.note_model_key(run_id, key)
+    messages = memory.messages
+    settings: dict[str, Any] = {}
+    if prompt is not None:
+        store.note_prompt_call(
+            run_id,
+            key,
+            prompt.version.name,
+            prompt.version.version,
+            prompt.version.content_hash,
+        )
+        messages = assemble(prompt.system, memory.messages)
+        settings = {
+            "model": prompt.version.model.alias,
+            "temperature": prompt.version.model.temperature,
+            "tool_choice": prompt.version.model.tool_choice,
+        }
     async for event in model.stream(
-        memory.messages,
+        messages,
         cancel=run.cancel_event,
         idempotency_key=key,
         tools=model_tools,
+        **settings,
     ):
         if run.cancel_event.is_set():
             break
@@ -383,3 +424,14 @@ def _remember(
 def _is_read(tools: ToolRegistry, name: str) -> bool:
     tool = tools.find(name)
     return tool is not None and tool.kind == "read"
+
+
+def _prompt_from_store(store: MemoryStore, run_id: str, catalog: Catalog) -> ResolvedPrompt | None:
+    run = store.get_run(run_id)
+    if run.prompt_name is None or run.prompt_version is None:
+        return None
+    version = catalog.load(run.prompt_name, run.prompt_version)
+    if run.prompt_hash is not None and run.prompt_hash != version.content_hash:
+        raise PromptError(f"运行记录的提示词哈希和文件不一致: {run_id}")
+    values = dict(run.prompt_variables)
+    return ResolvedPrompt(version=version, system=render(version, values), variables=values)

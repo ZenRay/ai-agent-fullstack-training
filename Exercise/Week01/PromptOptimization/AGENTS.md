@@ -13,6 +13,7 @@ app/model/    StreamingModel 与模型网关适配器
 app/tools/    工具注册；每个工具一个文件
 app/store/    线程、运行状态、事件日志、取消标记
 app/loop/     一次运行的控制过程
+app/prompts/  随代码发布的提示词版本
 app/api/      创建运行与取消
 app/main.py   组装
 cli/          第 8 步

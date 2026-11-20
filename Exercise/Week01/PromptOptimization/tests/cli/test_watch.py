@@ -16,7 +16,17 @@ class ScriptedModel:
         self.release = release
         self.index = 0
 
-    async def stream(self, messages, *, cancel, idempotency_key, tools=None):
+    async def stream(
+        self,
+        messages,
+        *,
+        cancel,
+        idempotency_key,
+        tools=None,
+        model=None,
+        temperature=None,
+        tool_choice=None,
+    ):
         if self.release is not None and self.index == 0:
             await _wait_release_or_cancel(self.release, cancel)
         if cancel.is_set():
@@ -35,7 +45,17 @@ class TextThenWait:
     def __init__(self, release: asyncio.Event) -> None:
         self.release = release
 
-    async def stream(self, messages, *, cancel, idempotency_key, tools=None):
+    async def stream(
+        self,
+        messages,
+        *,
+        cancel,
+        idempotency_key,
+        tools=None,
+        model=None,
+        temperature=None,
+        tool_choice=None,
+    ):
         yield TextDelta(type="text.delta", delta="北京")
         await _wait_release_or_cancel(self.release, cancel)
         if cancel.is_set():

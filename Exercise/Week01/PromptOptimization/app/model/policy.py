@@ -54,25 +54,31 @@ async def stream_with_policy(
     sleep: Callable[[float], Awaitable[None]] | None = None,
     rng: random.Random | None = None,
     tools: list[dict[str, Any]] | None = None,
+    model: str | None = None,
+    temperature: float | None = None,
+    tool_choice: str | None = None,
 ) -> AsyncIterator[ModelStreamEvent]:
     limits = limits or PolicyLimits()
     pause = sleep or asyncio.sleep
     random_source = rng or random.Random()
     waited = 0.0
     last_failure: ModelFailed | None = None
-    for model in routes:
+    for model_route in routes:
         move_on = False
         for attempt in range(limits.max_attempts):
             if cancel.is_set():
                 return
             try:
                 async for event in _read_attempt(
-                    model,
+                    model_route,
                     messages,
                     cancel,
                     idempotency_key,
                     limits,
                     tools,
+                    model_name=model,
+                    temperature=temperature,
+                    tool_choice=tool_choice,
                 ):
                     yield event
             except _Cancelled:
@@ -108,6 +114,10 @@ async def _read_attempt(
     idempotency_key: str,
     limits: PolicyLimits,
     tools: list[dict[str, Any]] | None,
+    *,
+    model_name: str | None = None,
+    temperature: float | None = None,
+    tool_choice: str | None = None,
 ) -> AsyncIterator[ModelStreamEvent]:
     abort = asyncio.Event()
     saw_content = False
@@ -116,6 +126,7 @@ async def _read_attempt(
         cancel=abort,
         idempotency_key=idempotency_key,
         tools=tools,
+        **_model_settings(model_name, temperature, tool_choice),
     )
     try:
         while True:
@@ -231,3 +242,18 @@ async def _aclose(stream: AsyncIterator[ModelStreamEvent]) -> None:
     close = getattr(stream, "aclose", None)
     if close is not None:
         await close()
+
+
+def _model_settings(
+    model: str | None,
+    temperature: float | None,
+    tool_choice: str | None,
+) -> dict[str, Any]:
+    settings: dict[str, Any] = {}
+    if model is not None:
+        settings["model"] = model
+    if temperature is not None:
+        settings["temperature"] = temperature
+    if tool_choice is not None:
+        settings["tool_choice"] = tool_choice
+    return settings

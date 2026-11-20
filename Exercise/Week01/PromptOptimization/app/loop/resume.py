@@ -3,6 +3,7 @@ from typing import Any
 from app.events.types import TERMINAL_TYPES
 from app.loop.run import run_until_terminal
 from app.model.protocol import StreamingModel
+from app.prompts.catalog import Catalog
 from app.store.memory import STATUS_OF, MemoryStore
 from app.store.sqlite import SqliteStore
 from app.tools.effects import ReconcileResult
@@ -16,9 +17,10 @@ async def resume_unfinished(
     store: MemoryStore | SqliteStore,
     model: StreamingModel,
     tools: ToolRegistry,
+    catalog: Catalog | None = None,
 ) -> None:
     for run in store.unfinished():
-        await resume_run(store, model, tools, run.run_id)
+        await resume_run(store, model, tools, run.run_id, catalog=catalog)
 
 
 async def resume_run(
@@ -26,6 +28,7 @@ async def resume_run(
     model: StreamingModel,
     tools: ToolRegistry,
     run_id: str,
+    catalog: Catalog | None = None,
 ) -> None:
     events = store.since(run_id, 0)
     terminal = next((event for event in reversed(events) if event.type in TERMINAL_TYPES), None)
@@ -33,7 +36,7 @@ async def resume_run(
         store.repair_status(run_id, STATUS_OF[terminal.type])
         return
     if not any(event.type == "run.started" for event in events):
-        await run_until_terminal(store, model, tools, run_id)
+        await run_until_terminal(store, model, tools, run_id, catalog=catalog)
         return
     run = store.get_run(run_id)
     if run.cancel_event.is_set():
@@ -54,6 +57,7 @@ async def resume_run(
             run_id,
             started=True,
             start_turn=_start_turn(events),
+            catalog=catalog,
         )
         return
     if any(event.type == "message.completed" for event in events):
@@ -63,14 +67,16 @@ async def resume_run(
         )
         return
     if _has_text(events):
-        await _continue_once(store, model, tools, run_id, events)
+        await _continue_once(store, model, tools, run_id, events, catalog)
         return
     key = f"{run_id}:0"
     store.note_model_key(run_id, key)
-    await run_until_terminal(store, model, tools, run_id, started=True, idempotency_key=key)
+    await run_until_terminal(
+        store, model, tools, run_id, started=True, idempotency_key=key, catalog=catalog
+    )
 
 
-async def _continue_once(store, model, tools, run_id: str, events) -> None:
+async def _continue_once(store, model, tools, run_id: str, events, catalog: Catalog | None) -> None:
     if store.continued(run_id):
         await store.append(
             run_id,
@@ -88,7 +94,9 @@ async def _continue_once(store, model, tools, run_id: str, events) -> None:
         store.add_message(store.get_run(run_id).thread_id, "assistant", partial)
     key = f"{run_id}:continue"
     store.note_model_key(run_id, key)
-    await run_until_terminal(store, model, tools, run_id, started=True, idempotency_key=key)
+    await run_until_terminal(
+        store, model, tools, run_id, started=True, idempotency_key=key, catalog=catalog
+    )
 
 
 async def _resolve_pending(store, tools: ToolRegistry, run_id: str, events, pending) -> None:
