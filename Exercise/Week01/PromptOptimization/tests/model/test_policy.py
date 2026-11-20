@@ -287,9 +287,15 @@ async def test_policy_forwards_prompt_model_settings() -> None:
             model=None,
             temperature=None,
             tool_choice=None,
+            response_format=None,
         ):
             self.calls.append(
-                {"model": model, "temperature": temperature, "tool_choice": tool_choice}
+                {
+                    "model": model,
+                    "temperature": temperature,
+                    "tool_choice": tool_choice,
+                    "response_format": response_format,
+                }
             )
             for event in _success():
                 yield event
@@ -304,7 +310,13 @@ async def test_policy_forwards_prompt_model_settings() -> None:
         limits=_limits(),
         model="chat-default",
         tool_choice="auto",
+        response_format={"type": "json_schema"},
     ):
         events.append(event)
     assert [event.type for event in events] == ["text.delta", "model.finished", "model.usage"]
-    assert model.calls[0] == {"model": "chat-default", "temperature": None, "tool_choice": "auto"}
+    assert model.calls[0] == {
+        "model": "chat-default",
+        "temperature": None,
+        "tool_choice": "auto",
+        "response_format": {"type": "json_schema"},
+    }

@@ -57,6 +57,7 @@ async def stream_with_policy(
     model: str | None = None,
     temperature: float | None = None,
     tool_choice: str | None = None,
+    response_format: dict[str, Any] | None = None,
 ) -> AsyncIterator[ModelStreamEvent]:
     limits = limits or PolicyLimits()
     pause = sleep or asyncio.sleep
@@ -79,6 +80,7 @@ async def stream_with_policy(
                     model_name=model,
                     temperature=temperature,
                     tool_choice=tool_choice,
+                    response_format=response_format,
                 ):
                     yield event
             except _Cancelled:
@@ -118,6 +120,7 @@ async def _read_attempt(
     model_name: str | None = None,
     temperature: float | None = None,
     tool_choice: str | None = None,
+    response_format: dict[str, Any] | None = None,
 ) -> AsyncIterator[ModelStreamEvent]:
     abort = asyncio.Event()
     saw_content = False
@@ -126,7 +129,7 @@ async def _read_attempt(
         cancel=abort,
         idempotency_key=idempotency_key,
         tools=tools,
-        **_model_settings(model_name, temperature, tool_choice),
+        **_model_settings(model_name, temperature, tool_choice, response_format),
     )
     try:
         while True:
@@ -248,6 +251,7 @@ def _model_settings(
     model: str | None,
     temperature: float | None,
     tool_choice: str | None,
+    response_format: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings: dict[str, Any] = {}
     if model is not None:
@@ -256,4 +260,6 @@ def _model_settings(
         settings["temperature"] = temperature
     if tool_choice is not None:
         settings["tool_choice"] = tool_choice
+    if response_format is not None:
+        settings["response_format"] = response_format
     return settings

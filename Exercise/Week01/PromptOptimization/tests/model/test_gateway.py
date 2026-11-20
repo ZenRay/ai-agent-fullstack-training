@@ -227,3 +227,38 @@ async def test_absent_temperature_stays_out_of_the_request_body() -> None:
     assert seen["body"]["model"] == "chat-default"
     assert "temperature" not in seen["body"]
     assert "tool_choice" not in seen["body"]
+
+
+@pytest.mark.asyncio
+async def test_structured_output_is_not_streamed() -> None:
+    seen: dict = {}
+    payload = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": '{"city":"北京"}'},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 4, "completion_tokens": 3},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        seen["accept"] = request.headers["accept"]
+        return httpx.Response(200, json=payload)
+
+    schema = {"type": "json_schema", "json_schema": {"name": "output", "strict": True}}
+    events = []
+    async for event in _model(handler).stream(
+        MESSAGES,
+        cancel=asyncio.Event(),
+        idempotency_key="idem-1",
+        response_format=schema,
+    ):
+        events.append(event)
+    assert seen["body"]["stream"] is False
+    assert "stream_options" not in seen["body"]
+    assert seen["body"]["response_format"] == schema
+    assert seen["accept"] == "application/json"
+    assert [event.type for event in events] == ["text.delta", "model.usage", "model.finished"]
+    assert events[0].delta == '{"city":"北京"}'

@@ -6,7 +6,14 @@ from threading import RLock
 from typing import Any
 
 from app.events.types import EVENT_ADAPTER, OPENING_TYPES, RunEvent
-from app.store.memory import RUN_STATUSES, STATUS_OF, TERMINAL_STATUSES, PromptCall, RunState
+from app.store.memory import (
+    RUN_STATUSES,
+    STATUS_OF,
+    TERMINAL_STATUSES,
+    OutputAttempt,
+    PromptCall,
+    RunState,
+)
 from app.tools.effects import Receipt
 
 _OPEN_STATUSES = ("queued", "running", "waiting_for_approval")
@@ -61,7 +68,11 @@ CREATE TABLE IF NOT EXISTS runs (
   prompt_name TEXT,
   prompt_version INTEGER,
   prompt_hash TEXT,
-  prompt_variables TEXT
+  prompt_variables TEXT,
+  repaired INTEGER NOT NULL DEFAULT 0,
+  degraded INTEGER NOT NULL DEFAULT 0,
+  degrade_reason TEXT,
+  output_attempts TEXT
 );
 
 CREATE TABLE IF NOT EXISTS run_events (
@@ -358,6 +369,52 @@ class SqliteStore:
             for row in rows
         ]
 
+    def note_output_attempt(
+        self,
+        run_id: str,
+        attempt: int,
+        failed_field: str | None,
+        code: str,
+    ) -> None:
+        with self._lock:
+            state = self._load_run(run_id)
+            state.output_attempts.append(
+                OutputAttempt(attempt=attempt, failed_field=failed_field, code=code)
+            )
+            self._db.execute(
+                "UPDATE runs SET output_attempts = ? WHERE run_id = ?",
+                (_dump_attempts(state.output_attempts), run_id),
+            )
+            self._db.commit()
+
+    def note_output_outcome(
+        self,
+        run_id: str,
+        *,
+        repaired: bool,
+        degraded: bool,
+        degrade_reason: str | None,
+    ) -> None:
+        with self._lock:
+            state = self._load_run(run_id)
+            self._db.execute(
+                """
+                UPDATE runs
+                SET repaired = ?, degraded = ?, degrade_reason = ?
+                WHERE run_id = ?
+                """,
+                (1 if repaired else 0, 1 if degraded else 0, degrade_reason, run_id),
+            )
+            self._db.commit()
+            state.repaired = repaired
+            state.degraded = degraded
+            state.degrade_reason = degrade_reason
+
+    def output_attempts(self, run_id: str) -> list[OutputAttempt]:
+        with self._lock:
+            state = self._load_run(run_id)
+        return list(state.output_attempts)
+
     def mark_continued(self, run_id: str) -> None:
         with self._lock:
             self._load_run(run_id)
@@ -551,6 +608,10 @@ class SqliteStore:
         state.prompt_hash = row["prompt_hash"]
         raw_variables = row["prompt_variables"]
         state.prompt_variables = json.loads(raw_variables) if raw_variables else {}
+        state.repaired = bool(row["repaired"])
+        state.degraded = bool(row["degraded"])
+        state.degrade_reason = row["degrade_reason"]
+        state.output_attempts = _load_attempts(row["output_attempts"])
         if row["cancel_requested"]:
             state.cancel_event.set()
         return state
@@ -676,6 +737,27 @@ def _placeholders(values: tuple[str, ...]) -> str:
     return ", ".join("?" for _ in values)
 
 
+def _dump_attempts(attempts: list[OutputAttempt]) -> str:
+    payload = [
+        {"attempt": item.attempt, "failed_field": item.failed_field, "code": item.code}
+        for item in attempts
+    ]
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _load_attempts(raw: str | None) -> list[OutputAttempt]:
+    if not raw:
+        return []
+    return [
+        OutputAttempt(
+            attempt=int(item["attempt"]),
+            failed_field=item["failed_field"],
+            code=item["code"],
+        )
+        for item in json.loads(raw)
+    ]
+
+
 def _ensure_prompt_columns(db: sqlite3.Connection) -> None:
     present = {row["name"] for row in db.execute("PRAGMA table_info(runs)")}
     for name, declaration in (
@@ -683,6 +765,10 @@ def _ensure_prompt_columns(db: sqlite3.Connection) -> None:
         ("prompt_version", "INTEGER"),
         ("prompt_hash", "TEXT"),
         ("prompt_variables", "TEXT"),
+        ("repaired", "INTEGER NOT NULL DEFAULT 0"),
+        ("degraded", "INTEGER NOT NULL DEFAULT 0"),
+        ("degrade_reason", "TEXT"),
+        ("output_attempts", "TEXT"),
     ):
         if name not in present:
             db.execute(f"ALTER TABLE runs ADD COLUMN {name} {declaration}")

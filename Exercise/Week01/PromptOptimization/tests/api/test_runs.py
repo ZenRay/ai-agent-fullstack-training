@@ -210,6 +210,8 @@ async def test_create_streams_until_completed_and_keeps_the_user_message() -> No
         "prompt_name": store.get_run(run_id).prompt_name,
         "prompt_version": store.get_run(run_id).prompt_version,
         "prompt_hash": store.get_run(run_id).prompt_hash,
+        "degraded": False,
+        "degrade_reason": None,
     }
 
 

@@ -8,6 +8,8 @@ from app.model.protocol import StreamingModel
 from app.prompts.assemble import assemble, tool_definitions
 from app.prompts.catalog import Catalog, default_catalog
 from app.prompts.hashing import PromptError
+from app.prompts.output import check_output, degrade_text, repair_prompt
+from app.prompts.output import response_format as structured_format
 from app.prompts.render import ResolvedPrompt, render
 from app.store.memory import MemoryStore
 from app.tools.execute import canonical_arguments, execute_tool
@@ -181,6 +183,9 @@ async def _read_model(
             "temperature": prompt.version.model.temperature,
             "tool_choice": prompt.version.model.tool_choice,
         }
+        if prompt.version.output is not None:
+            settings["response_format"] = structured_format(prompt.version.output)
+    hold_text = prompt is not None and prompt.version.output is not None
     async for event in model.stream(
         messages,
         cancel=run.cancel_event,
@@ -203,6 +208,9 @@ async def _read_model(
         if event.type == "text.delta":
             if not event.delta:
                 continue
+            text_parts.append(event.delta)
+            if hold_text:
+                continue
             if message_id is None:
                 memory.message_count += 1
                 message_id = f"m{memory.message_count}"
@@ -210,7 +218,6 @@ async def _read_model(
                     run_id,
                     {"type": "message.started", "message_id": message_id, "role": "assistant"},
                 )
-            text_parts.append(event.delta)
             await store.append(
                 run_id,
                 {"type": "message.delta", "message_id": message_id, "delta": event.delta},
@@ -236,7 +243,12 @@ async def _read_model(
 
     text = "".join(text_parts)
     if finish_reason == "stop":
-        await _complete(store, memory, run_id, message_id, text)
+        if hold_text and prompt is not None:
+            await _accept_structured(
+                store, model, memory, run_id, prompt, text, messages, settings, key
+            )
+        else:
+            await _complete(store, memory, run_id, message_id, text)
         return None
     failed = _FAILED_FINISH.get(finish_reason or "")
     if failed is not None:
@@ -374,6 +386,132 @@ async def _record_results(
             repeated = True
         memory.seen[signature] = result["output"]
     return repeated
+
+
+async def _accept_structured(
+    store: MemoryStore,
+    model: StreamingModel,
+    memory: _Memory,
+    run_id: str,
+    prompt: ResolvedPrompt,
+    text: str,
+    messages: list[dict[str, Any]],
+    settings: dict[str, Any],
+    turn_key: str,
+) -> None:
+    contract = prompt.version.output
+    if contract is None:
+        await _emit_answer(store, memory, run_id, text)
+        return
+    sources = [
+        str(message.get("content") or "")
+        for message in memory.messages
+        if message.get("role") == "tool"
+    ]
+    verdict = check_output(contract, text, sources)
+    if verdict.ok:
+        store.note_output_attempt(run_id, 1, None, "accepted")
+        await _emit_answer(store, memory, run_id, verdict.document)
+        return
+    store.note_output_attempt(run_id, 1, verdict.failed_field, verdict.code)
+    repair_key = f"{turn_key}:repair"
+    store.note_model_key(run_id, repair_key)
+    store.note_prompt_call(
+        run_id,
+        repair_key,
+        prompt.version.name,
+        prompt.version.version,
+        prompt.version.content_hash,
+    )
+    repair_messages = [
+        *messages,
+        {"role": "user", "content": repair_prompt(verdict, verdict.document)},
+    ]
+    repair_settings = {
+        key: value
+        for key, value in settings.items()
+        if key in {"model", "temperature", "response_format"}
+    }
+    repaired = await _read_repair(
+        store, model, memory, run_id, repair_messages, repair_settings, repair_key
+    )
+    if repaired is None:
+        return
+    repaired_text, finish_reason = repaired
+    failed = _FAILED_FINISH.get(finish_reason or "")
+    if failed is not None:
+        code, message, retryable = failed
+        await _fail(store, run_id, code, message, retryable)
+        return
+    if finish_reason != "stop":
+        await _fail(store, run_id, finish_reason or "repair", "修复没有返回完整结果", False)
+        return
+    second = check_output(contract, repaired_text, sources)
+    if second.ok:
+        store.note_output_attempt(run_id, 2, None, "repaired")
+        store.note_output_outcome(run_id, repaired=True, degraded=False, degrade_reason=None)
+        await _emit_answer(store, memory, run_id, second.document)
+        return
+    store.note_output_attempt(run_id, 2, second.failed_field, second.code)
+    reason = degrade_text(second.missing)
+    store.note_output_outcome(run_id, repaired=False, degraded=True, degrade_reason=reason)
+    await _emit_answer(store, memory, run_id, reason)
+
+
+async def _read_repair(
+    store: MemoryStore,
+    model: StreamingModel,
+    memory: _Memory,
+    run_id: str,
+    messages: list[dict[str, Any]],
+    settings: dict[str, Any],
+    repair_key: str,
+) -> tuple[str, str | None] | None:
+    run = store.get_run(run_id)
+    parts: list[str] = []
+    finish_reason: str | None = None
+    async for event in model.stream(
+        messages,
+        cancel=run.cancel_event,
+        idempotency_key=repair_key,
+        tools=None,
+        **settings,
+    ):
+        if run.cancel_event.is_set():
+            break
+        if event.type == "model.failed":
+            await _fail(store, run_id, event.code, event.message, event.retryable)
+            return None
+        if event.type == "model.usage":
+            memory.input_tokens += event.input_tokens
+            memory.output_tokens += event.output_tokens
+            store.note_usage(run_id, event.input_tokens, event.output_tokens)
+            continue
+        if finish_reason is not None:
+            continue
+        if event.type == "text.delta" and event.delta:
+            parts.append(event.delta)
+        elif event.type == "model.finished":
+            finish_reason = event.finish_reason
+    if run.cancel_event.is_set():
+        await _cancel(store, run_id)
+        return None
+    return "".join(parts), finish_reason
+
+
+async def _emit_answer(store: MemoryStore, memory: _Memory, run_id: str, text: str) -> None:
+    memory.message_count += 1
+    message_id = f"m{memory.message_count}"
+    await store.append(
+        run_id,
+        {"type": "message.started", "message_id": message_id, "role": "assistant"},
+    )
+    if text:
+        await store.append(
+            run_id,
+            {"type": "message.delta", "message_id": message_id, "delta": text},
+        )
+    await _complete(store, memory, run_id, message_id, text)
 
 
 async def _complete(

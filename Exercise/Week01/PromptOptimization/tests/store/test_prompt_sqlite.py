@@ -73,10 +73,35 @@ def test_old_database_gains_prompt_columns(tmp_path) -> None:
     db.close()
     store = SqliteStore(path)
     assert "prompt_hash" in store.columns("runs")
+    assert "degraded" in store.columns("runs")
     assert "content_hash" in store.columns("prompt_calls")
     store.create_run("th", "run_1")
     store.bind_prompt("run_1", name="assistant", version=1, content_hash="a" * 64, variables={})
     store.close()
     again = SqliteStore(path)
     assert again.get_run("run_1").prompt_name == "assistant"
+    again.close()
+
+
+def test_output_attempt_survives_reopen(tmp_path) -> None:
+    path = tmp_path / "output.sqlite"
+    store = SqliteStore(path)
+    store.create_run("th", "run_1")
+    store.note_output_attempt("run_1", 1, "celsius", "business_rule")
+    store.note_output_outcome(
+        "run_1",
+        repaired=False,
+        degraded=True,
+        degrade_reason="这不是可执行结构。缺少：celsius。",
+    )
+    store.close()
+    again = SqliteStore(path)
+    run = again.get_run("run_1")
+    assert run.degraded is True
+    assert run.repaired is False
+    assert run.degrade_reason == "这不是可执行结构。缺少：celsius。"
+    attempt = again.output_attempts("run_1")[0]
+    assert attempt.attempt == 1
+    assert attempt.failed_field == "celsius"
+    assert attempt.code == "business_rule"
     again.close()

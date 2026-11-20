@@ -15,6 +15,7 @@ from app.prompts.hashing import (
 from app.prompts.types import (
     EvalSet,
     ModelSettings,
+    OutputContract,
     PromptVersion,
     ToolContract,
     VariableDecl,
@@ -38,6 +39,7 @@ def build_version(
     tools: list[ToolContract] | None = None,
     assembly: Literal["system_then_thread"] = "system_then_thread",
     model: ModelSettings | None = None,
+    output: OutputContract | None = None,
 ) -> PromptVersion:
     """算出内容哈希后再返回。调用方不手写哈希。"""
     draft = PromptVersion(
@@ -49,6 +51,7 @@ def build_version(
         tools=list(tools or []),
         assembly=assembly,
         model=model or ModelSettings(alias="chat-default", tool_choice="auto"),
+        output=output,
         content_hash="0" * 64,
     )
     _check_version(draft)
@@ -97,7 +100,7 @@ class Catalog:
         if path.exists():
             raise PromptError(f"版本已存在: {version.name}@{version.version}")
         path.parent.mkdir(parents=True, exist_ok=True)
-        _write_json(path, version.model_dump())
+        _write_json(path, version.model_dump(by_alias=True))
         return path
 
     def load_eval(self, name: str, version: int) -> EvalSet:
@@ -152,6 +155,16 @@ def _check_version(version: PromptVersion) -> None:
     unknown = sorted(set(_PLACEHOLDER.findall(version.template)) - declared)
     if unknown:
         raise PromptError(f"未声明的占位符: {', '.join(unknown)}")
+    if version.output is None:
+        return
+    properties = version.output.json_schema.get("properties")
+    if not isinstance(properties, dict):
+        raise PromptError("输出 schema 缺少 properties")
+    fields = [rule.field for rule in version.output.rules]
+    _unique(fields, "业务规则")
+    missing = [field for field in fields if field not in properties]
+    if missing:
+        raise PromptError(f"业务规则字段不在 schema 里: {', '.join(missing)}")
 
 
 def _check_eval(eval_set: EvalSet) -> None:

@@ -25,6 +25,22 @@ class ModelSettings(BaseModel):
     tool_choice: str | None = None
 
 
+class OutputRule(BaseModel):
+    """schema 表达不了的业务规则。目前只检查数字是否来自工具原文。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    name: Literal["number_from_source"]
+    field: str = Field(min_length=1)
+
+
+class OutputContract(BaseModel):
+    """最终答案必须被程序解析时才挂上。空着表示仍是自由文本。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+    json_schema: dict[str, Any] = Field(alias="schema")
+    rules: list[OutputRule] = Field(default_factory=list)
+
+
 class PromptVersion(BaseModel):
     """写入后不再修改。content_hash 只覆盖会改变行为的字段。"""
 
@@ -37,6 +53,7 @@ class PromptVersion(BaseModel):
     tools: list[ToolContract]
     assembly: Literal["system_then_thread"]
     model: ModelSettings
+    output: OutputContract | None = None
     content_hash: str
 
 

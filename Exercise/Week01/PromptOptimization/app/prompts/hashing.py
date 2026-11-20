@@ -22,13 +22,16 @@ def content_hash(payload: dict[str, Any]) -> str:
 
 def identity_dict(version: PromptVersion) -> dict[str, Any]:
     """假设、名称和版本号不进入哈希。改这些不会让同一段指令变成另一份内容。"""
-    return {
+    payload: dict[str, Any] = {
         "template": version.template,
         "variables": [item.model_dump() for item in version.variables],
         "tools": [tool.model_dump() for tool in version.tools],
         "assembly": version.assembly,
         "model": version.model.model_dump(),
     }
+    if version.output is not None:
+        payload["output"] = version.output.model_dump(by_alias=True)
+    return payload
 
 
 def eval_identity(eval_set: EvalSet) -> dict[str, Any]:

@@ -30,6 +30,13 @@ class PromptCall:
     content_hash: str
 
 
+@dataclass(frozen=True)
+class OutputAttempt:
+    attempt: int
+    failed_field: str | None
+    code: str
+
+
 @dataclass
 class RunState:
     thread_id: str
@@ -48,6 +55,10 @@ class RunState:
     prompt_hash: str | None = None
     prompt_variables: dict[str, str] = field(default_factory=dict)
     prompt_calls: list[PromptCall] = field(default_factory=list)
+    repaired: bool = False
+    degraded: bool = False
+    degrade_reason: str | None = None
+    output_attempts: list[OutputAttempt] = field(default_factory=list)
 
 
 class MemoryStore:
@@ -187,6 +198,33 @@ class MemoryStore:
 
     def prompt_calls(self, run_id: str) -> list[PromptCall]:
         return list(self.get_run(run_id).prompt_calls)
+
+    def note_output_attempt(
+        self,
+        run_id: str,
+        attempt: int,
+        failed_field: str | None,
+        code: str,
+    ) -> None:
+        self.get_run(run_id).output_attempts.append(
+            OutputAttempt(attempt=attempt, failed_field=failed_field, code=code)
+        )
+
+    def note_output_outcome(
+        self,
+        run_id: str,
+        *,
+        repaired: bool,
+        degraded: bool,
+        degrade_reason: str | None,
+    ) -> None:
+        state = self.get_run(run_id)
+        state.repaired = repaired
+        state.degraded = degraded
+        state.degrade_reason = degrade_reason
+
+    def output_attempts(self, run_id: str) -> list[OutputAttempt]:
+        return list(self.get_run(run_id).output_attempts)
 
     def note_usage(self, run_id: str, input_tokens: int, output_tokens: int) -> None:
         state = self.get_run(run_id)

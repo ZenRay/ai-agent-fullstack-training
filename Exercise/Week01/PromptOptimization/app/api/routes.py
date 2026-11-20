@@ -88,7 +88,7 @@ def create_router(store: Store) -> RunRouter:
         return JSONResponse({"run_id": run_id, "status": "cancelling"}, status_code=202)
 
     @router.get("/v1/runs/{run_id}")
-    async def get_run(run_id: str) -> dict[str, str | int | None]:
+    async def get_run(run_id: str) -> dict[str, str | int | bool | None]:
         try:
             run = store.get_run(run_id)
         except KeyError:
@@ -101,6 +101,8 @@ def create_router(store: Store) -> RunRouter:
             "prompt_name": run.prompt_name,
             "prompt_version": run.prompt_version,
             "prompt_hash": run.prompt_hash,
+            "degraded": run.degraded,
+            "degrade_reason": run.degrade_reason,
         }
 
     @router.get("/v1/runs/{run_id}/events", response_model=None)

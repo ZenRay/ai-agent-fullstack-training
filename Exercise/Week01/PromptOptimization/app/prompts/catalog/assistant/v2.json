@@ -1,0 +1,69 @@
+{
+  "name": "assistant",
+  "version": 2,
+  "hypothesis": "最终答案改成可校验的天气卡片，温度必须来自工具原文",
+  "template": "你是天气助手。用户询问某个城市的天气时，调用 get_weather，并把城市名放入 city。用户没有给出城市名时，先追问城市，不要调用工具。与天气无关的问题直接回答，不要调用工具。不要编造天气。\n给出最终答案时只返回一个 JSON 对象，不要使用 markdown 围栏。字段顺序是 reason、city、celsius、kind。reason 是依据，city 是城市，celsius 是整数，并且必须原样来自本轮工具结果里出现的数字。kind 只能是 weather 或 other，拿不准时用 other。",
+  "variables": [],
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "查询城市当前天气。只读，不会修改数据。调用前需要城市名。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "城市名，例如北京"
+          }
+        },
+        "required": [
+          "city"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "assembly": "system_then_thread",
+  "model": {
+    "alias": "chat-default",
+    "temperature": null,
+    "tool_choice": "auto"
+  },
+  "output": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "celsius": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "weather",
+            "other"
+          ]
+        }
+      },
+      "required": [
+        "reason",
+        "city",
+        "celsius",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "rules": [
+      {
+        "name": "number_from_source",
+        "field": "celsius"
+      }
+    ]
+  },
+  "content_hash": "76d1f461c88414acb1436c23f7223f9197c882ea4f976eda25e2fdafd051921d"
+}

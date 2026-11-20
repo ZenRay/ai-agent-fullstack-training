@@ -16,4 +16,5 @@ class StreamingModel(Protocol):
         model: str | None = None,
         temperature: float | None = None,
         tool_choice: str | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[ModelStreamEvent]: ...
